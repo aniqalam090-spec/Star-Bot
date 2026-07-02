@@ -3,11 +3,11 @@ import { logger } from "../lib/logger";
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
-// Model cascade — tried in order, falls back on rate limit / timeout
+// Model cascade — tried in order, falls back on rate limit / timeout / unavailable
 const MODELS = [
-  "meta-llama/llama-4-maverick-17b-128e-instruct", // best available on Groq
-  "llama-3.3-70b-versatile",                        // reliable 70b
-  "llama-3.1-8b-instant",                           // fast fallback
+  "deepseek-r1-distill-llama-70b", // strong reasoning model
+  "llama-3.3-70b-versatile",       // reliable 70b
+  "llama-3.1-8b-instant",          // fast fallback
 ];
 const FAST_MODEL = "llama-3.1-8b-instant";
 
@@ -23,20 +23,33 @@ function tokenBudget(lastUserMsg: string): number {
   return 850;
 }
 
+function getStatus(err: unknown): number | null {
+  return typeof err === "object" && err !== null && "status" in err
+    ? ((err as { status: unknown }).status as number)
+    : null;
+}
+
+// Soft errors = skip to next model in cascade rather than crash
+function isSoftError(err: unknown): boolean {
+  const status = getStatus(err);
+  const msg = err instanceof Error ? err.message : String(err);
+  return (
+    status === 429 || status === 404 ||
+    status === 503 || status === 504 ||
+    msg.includes("rate_limit") || msg.includes("429") ||
+    msg.includes("model_not_found") || msg.includes("does not exist") ||
+    msg.includes("timeout") || msg.includes("503") || msg.includes("504")
+  );
+}
+
 function isRateLimit(err: unknown): boolean {
-  const status =
-    typeof err === "object" && err !== null && "status" in err
-      ? (err as { status: unknown }).status
-      : null;
+  const status = getStatus(err);
   const msg = err instanceof Error ? err.message : String(err);
   return status === 429 || msg.includes("rate_limit") || msg.includes("429");
 }
 
 function isTimeout(err: unknown): boolean {
-  const status =
-    typeof err === "object" && err !== null && "status" in err
-      ? (err as { status: unknown }).status
-      : null;
+  const status = getStatus(err);
   const msg = err instanceof Error ? err.message : String(err);
   return (
     status === 503 || status === 504 ||
@@ -78,8 +91,7 @@ export async function generateResponse(messages: ChatMessage[]): Promise<string>
       if (i > 0) logger.info({ model }, "Used fallback model");
       return result;
     } catch (err) {
-      const soft = isRateLimit(err) || isTimeout(err);
-      if (!soft) {
+      if (!isSoftError(err)) {
         logger.error({ err, model }, "Groq hard error");
         throw err;
       }
