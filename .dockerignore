@@ -1,0 +1,21 @@
+# Git
+.git
+.gitignore
+
+# Dev artifacts
+**/dist
+**/*.map
+**/node_modules
+
+# Replit-specific
+.replit
+.cache
+.local
+.upm
+replit.nix
+
+# Logs
+*.log
+
+# Mockup sandbox (not needed for bot)
+artifacts/mockup-sandbox

@@ -1,0 +1,20 @@
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+# Push DB schema before each deploy goes live
+releaseCommand = "pnpm --filter @workspace/db run push"
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 10
+
+# Required environment variables — set these in Railway's dashboard:
+#
+#   DISCORD_BOT_TOKEN     your bot token from discord.com/developers
+#   GROQ_API_KEY          your Groq API key
+#   SESSION_SECRET        any long random string
+#   DISCORD_OWNER_ID      1186652407313219595
+#   DISCORD_OWNER_USERNAME  aniq_alam
+#   DISCORD_OWNER_NAME    Aniq
+#
+#   DATABASE_URL          auto-set when you add the Railway Postgres plugin
