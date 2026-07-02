@@ -8,6 +8,7 @@ id = "3B4_FFSkEVBkAeYMFRJ2e"
 localPort = 8080
 name = "API Server"
 paths = ["/api"]
+deploymentTarget = "vm"
 
 [services.development]
 run = "pnpm --filter @workspace/api-server run dev"
