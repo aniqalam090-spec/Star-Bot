@@ -3,8 +3,13 @@ import { logger } from "../lib/logger";
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
-const PRIMARY_MODEL = "llama-3.3-70b-versatile";
-const FAST_MODEL    = "llama-3.1-8b-instant";
+// Model cascade — tried in order, falls back on rate limit / timeout
+const MODELS = [
+  "meta-llama/llama-4-maverick-17b-128e-instruct", // best available on Groq
+  "llama-3.3-70b-versatile",                        // reliable 70b
+  "llama-3.1-8b-instant",                           // fast fallback
+];
+const FAST_MODEL = "llama-3.1-8b-instant";
 
 export interface ChatMessage {
   role: "system" | "user" | "assistant";
@@ -63,39 +68,28 @@ export async function generateResponse(messages: ChatMessage[]): Promise<string>
   const lastUser = [...messages].reverse().find((m) => m.role === "user")?.content ?? "";
   const max_tokens = tokenBudget(lastUser);
 
-  // 1st attempt — primary model
-  try {
-    return await callGroq(PRIMARY_MODEL, messages, max_tokens);
-  } catch (err) {
-    if (!isRateLimit(err) && !isTimeout(err)) {
-      logger.error({ err }, "Groq generation error");
-      throw err;
+  // Walk through the cascade — biggest/best first, smaller as fallback
+  for (let i = 0; i < MODELS.length; i++) {
+    const model = MODELS[i]!;
+    const isLast = i === MODELS.length - 1;
+
+    try {
+      const result = await callGroq(model, messages, max_tokens);
+      if (i > 0) logger.info({ model }, "Used fallback model");
+      return result;
+    } catch (err) {
+      const soft = isRateLimit(err) || isTimeout(err);
+      if (!soft) {
+        logger.error({ err, model }, "Groq hard error");
+        throw err;
+      }
+      logger.warn({ model, next: MODELS[i + 1] ?? "none" }, "Model unavailable — trying next");
+      if (!isLast) await sleep(i === 0 ? 1200 : 2500);
     }
-    logger.warn({ err }, "Primary model rate limited — falling back to fast model");
   }
 
-  // Short wait then retry with fast model
-  await sleep(1500);
-  try {
-    return await callGroq(FAST_MODEL, messages, max_tokens);
-  } catch (err) {
-    if (!isRateLimit(err) && !isTimeout(err)) {
-      logger.error({ err }, "Groq fast model error");
-      throw err;
-    }
-    logger.warn({ err }, "Fast model also rate limited — waiting and retrying");
-  }
-
-  // Last resort — wait longer and try fast model once more
-  await sleep(4000);
-  try {
-    return await callGroq(FAST_MODEL, messages, max_tokens);
-  } catch (err) {
-    logger.error({ err }, "All Groq attempts exhausted");
-    if (isRateLimit(err)) return "swamped rn, gimme a sec and try again";
-    if (isTimeout(err))   return "groq's being slow, try again in a moment";
-    throw err;
-  }
+  // All models exhausted
+  return "swamped rn, gimme a sec and try again";
 }
 
 export interface MemoryExtract {
