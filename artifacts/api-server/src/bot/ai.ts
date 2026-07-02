@@ -3,11 +3,10 @@ import { logger } from "../lib/logger";
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
-// Model cascade — tried in order, falls back on rate limit / timeout / unavailable
+// Model cascade — tried in order, falls back on rate limit / unavailable / decommissioned
 const MODELS = [
-  "deepseek-r1-distill-llama-70b", // strong reasoning model
-  "llama-3.3-70b-versatile",       // reliable 70b
-  "llama-3.1-8b-instant",          // fast fallback
+  "llama-3.3-70b-versatile", // primary
+  "llama-3.1-8b-instant",    // fast fallback
 ];
 const FAST_MODEL = "llama-3.1-8b-instant";
 
@@ -30,15 +29,15 @@ function getStatus(err: unknown): number | null {
 }
 
 // Soft errors = skip to next model in cascade rather than crash
+// Any 4xx from Groq means the model is unavailable/decommissioned/rate-limited — skip it
 function isSoftError(err: unknown): boolean {
   const status = getStatus(err);
   const msg = err instanceof Error ? err.message : String(err);
+  if (status !== null && status >= 400 && status < 500) return true;
   return (
-    status === 429 || status === 404 ||
-    status === 503 || status === 504 ||
-    msg.includes("rate_limit") || msg.includes("429") ||
-    msg.includes("model_not_found") || msg.includes("does not exist") ||
-    msg.includes("timeout") || msg.includes("503") || msg.includes("504")
+    msg.includes("rate_limit") || msg.includes("timeout") ||
+    msg.includes("model_not_found") || msg.includes("model_decommissioned") ||
+    msg.includes("does not exist") || msg.includes("503") || msg.includes("504")
   );
 }
 
