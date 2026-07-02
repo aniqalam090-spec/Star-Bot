@@ -18,3 +18,10 @@ expertMode = true
 [postMerge]
 path = "scripts/post-merge.sh"
 timeoutMs = 20000
+
+[userenv]
+
+[userenv.shared]
+DISCORD_OWNER_ID = "1186652407313219595"
+DISCORD_OWNER_NAME = "Aniq Alam"
+DISCORD_OWNER_USERNAME = "aniq_alam"
