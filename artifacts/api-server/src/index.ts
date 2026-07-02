@@ -28,4 +28,12 @@ app.listen(port, (err) => {
   startBot().catch((err) => {
     logger.error({ err }, "Failed to start Discord bot");
   });
+
+  // Self-ping every 4 minutes to prevent Replit from sleeping
+  const selfPingUrl = `http://localhost:${port}/api/healthz`;
+  setInterval(() => {
+    fetch(selfPingUrl).catch(() => {
+      // silently ignore — server might be momentarily busy
+    });
+  }, 4 * 60 * 1000);
 });
