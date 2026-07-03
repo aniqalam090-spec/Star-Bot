@@ -3,10 +3,9 @@ import type { Bot } from "mineflayer";
 import type { Client as DiscordClient } from "discord.js";
 import { logger } from "../lib/logger";
 
-const MC_USERNAME = "Itz_Iconic";
-const CONNECT_TIMEOUT_MS = 15_000;
-const CONTROLS = ["forward", "back", "left", "right", "jump", "sprint", "sneak"] as const;
-type Control = (typeof CONTROLS)[number];
+// ── Types ─────────────────────────────────────────────────────────────────────
+
+export type AuthMode = "offline" | "microsoft";
 
 interface MCState {
   bot: Bot;
@@ -14,25 +13,49 @@ interface MCState {
   port: number;
   reportChannelId: string;
   connected: boolean;
+  authMode: AuthMode;
 }
+
+// ── State ─────────────────────────────────────────────────────────────────────
+
+const MC_USERNAME = "Itz_Iconic";
+const CONTROLS = ["forward", "back", "left", "right", "jump", "sprint", "sneak"] as const;
+type Control = (typeof CONTROLS)[number];
 
 let state: MCState | null = null;
 let discord: DiscordClient | null = null;
+let preferredAuth: AuthMode = "offline"; // owner's saved preference
+
+// ── Init ──────────────────────────────────────────────────────────────────────
 
 export function initMinecraft(client: DiscordClient) {
   discord = client;
 }
+
+// ── Auth mode ─────────────────────────────────────────────────────────────────
+
+export function setAuthMode(mode: AuthMode) {
+  preferredAuth = mode;
+}
+
+export function getAuthMode(): AuthMode {
+  return preferredAuth;
+}
+
+// ── Queries ───────────────────────────────────────────────────────────────────
 
 export function isConnected(): boolean {
   return state?.connected === true;
 }
 
 export function getMCStatus(): string {
-  if (!state?.connected) return "not connected to any server";
+  if (!state?.connected) return `not connected to any server (auth mode: ${preferredAuth})`;
   const pos = state.bot.entity?.position;
   const posStr = pos ? ` | pos: ${pos.x.toFixed(0)} ${pos.y.toFixed(0)} ${pos.z.toFixed(0)}` : "";
-  return `connected to \`${state.host}:${state.port}\` as \`${MC_USERNAME}\`${posStr}`;
+  return `connected to \`${state.host}:${state.port}\` as \`${MC_USERNAME}\` [${state.authMode}]${posStr}`;
 }
+
+// ── Discord relay ─────────────────────────────────────────────────────────────
 
 async function reportToDiscord(channelId: string, text: string) {
   if (!discord) return;
@@ -42,14 +65,17 @@ async function reportToDiscord(channelId: string, text: string) {
   } catch { /* silently ignore */ }
 }
 
-// ── Connect ──────────────────────────────────────────────────────────────────
+// ── Connect ───────────────────────────────────────────────────────────────────
 
 export async function connectToServer(
   host: string,
   port = 25565,
-  reportChannelId: string
+  reportChannelId: string,
+  authOverride?: AuthMode
 ): Promise<string> {
-  // Clean up existing connection first
+  const auth = authOverride ?? preferredAuth;
+
+  // Clean up existing connection
   if (state) {
     state.connected = false;
     state.bot.quit();
@@ -57,26 +83,62 @@ export async function connectToServer(
     await new Promise((r) => setTimeout(r, 500));
   }
 
+  // For Microsoft auth, warn the user upfront so they know to watch for the code
+  if (auth === "microsoft") {
+    await reportToDiscord(
+      reportChannelId,
+      `**[MC]** Starting Microsoft auth for \`${host}:${port}\` — watch for a device-code message below…`
+    );
+  }
+
   return new Promise((resolve, reject) => {
-    const bot = mineflayer.createBot({
+    // Microsoft auth can take several minutes for the user to complete;
+    // offline mode should connect in seconds.
+    const TIMEOUT_MS = auth === "microsoft" ? 5 * 60 * 1000 : 20_000;
+
+    const botOptions: Parameters<typeof mineflayer.createBot>[0] = {
       host,
       port,
       username: MC_USERNAME,
-      auth: "offline",
-      // version omitted — auto-detect from server
+      auth: auth === "microsoft" ? "microsoft" : "offline",
+      // Cache Microsoft tokens so re-auth isn't needed every session
+      profilesFolder: auth === "microsoft" ? "/tmp/mc-auth" : (undefined as any),
       hideErrors: false,
-    });
+    };
+
+    // Intercept the Microsoft device-code prompt and send it to Discord
+    // instead of printing to stdout (where the owner can't see it).
+    if (auth === "microsoft") {
+      (botOptions as any).onMsaCode = async (data: {
+        user_code: string;
+        verification_uri: string;
+        expires_in: number;
+      }) => {
+        const mins = Math.floor(data.expires_in / 60);
+        await reportToDiscord(
+          reportChannelId,
+          `**[MC Auth]** Open **<${data.verification_uri}>** and enter code \`${data.user_code}\`\n` +
+            `*(expires in ${mins} minute${mins === 1 ? "" : "s"})*`
+        );
+      };
+    }
+
+    const bot = mineflayer.createBot(botOptions);
 
     const timer = setTimeout(() => {
       bot.quit();
-      reject(new Error("connection timed out after 15s"));
-    }, CONNECT_TIMEOUT_MS);
+      reject(new Error(
+        auth === "microsoft"
+          ? "Microsoft auth timed out (5 min) — make sure you entered the device code in time"
+          : "connection timed out after 20s"
+      ));
+    }, TIMEOUT_MS);
 
     bot.once("spawn", () => {
       clearTimeout(timer);
-      state = { bot, host, port, reportChannelId, connected: true };
+      state = { bot, host, port, reportChannelId, connected: true, authMode: auth };
 
-      // Forward chat — never echo own messages (no chat loops)
+      // Forward server chat — never echo own messages (prevents chat loops)
       bot.on("chat", (username: string, message: string) => {
         if (username === MC_USERNAME) return;
         void reportToDiscord(reportChannelId, `**[MC]** <${username}> ${message}`);
@@ -105,7 +167,7 @@ export async function connectToServer(
         state = null;
       });
 
-      resolve(`✅ connected to \`${host}:${port}\` as \`${MC_USERNAME}\``);
+      resolve(`✅ connected to \`${host}:${port}\` as \`${MC_USERNAME}\` [${auth}]`);
     });
 
     bot.once("error", (err: Error) => {
@@ -115,7 +177,7 @@ export async function connectToServer(
   });
 }
 
-// ── Disconnect ───────────────────────────────────────────────────────────────
+// ── Disconnect ────────────────────────────────────────────────────────────────
 
 export function disconnect(): string {
   if (!state) return "not connected to any server";
@@ -126,7 +188,7 @@ export function disconnect(): string {
   return `disconnected from \`${host}:${port}\``;
 }
 
-// ── Chat ─────────────────────────────────────────────────────────────────────
+// ── Chat ──────────────────────────────────────────────────────────────────────
 
 export function sendChat(message: string): string {
   if (!state?.connected) return "not connected to a server";
@@ -135,7 +197,7 @@ export function sendChat(message: string): string {
   return `said in game: "${safe}"`;
 }
 
-// ── Movement ─────────────────────────────────────────────────────────────────
+// ── Movement ──────────────────────────────────────────────────────────────────
 
 const DIRECTION_MAP: Record<string, Control> = {
   forward: "forward", north: "forward",
@@ -167,7 +229,7 @@ export function stopAll(): string {
   return "stopped all movement";
 }
 
-// ── Info ─────────────────────────────────────────────────────────────────────
+// ── Info ──────────────────────────────────────────────────────────────────────
 
 export function getPos(): string {
   if (!state?.connected) return "not connected";

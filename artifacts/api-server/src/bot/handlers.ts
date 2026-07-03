@@ -110,7 +110,7 @@ ${memorySections ? memorySections + "\n\n" : ""}Current time (UTC): ${now}`;
 // ── Minecraft natural-language handler (owner only) ────────────────────────
 
 type MCIntent =
-  | { type: "connect"; host: string; port: number }
+  | { type: "connect"; host: string; port: number; authOverride?: "offline" | "microsoft" }
   | { type: "disconnect" }
   | { type: "chat"; message: string }
   | { type: "move"; direction: string; durationMs: number }
@@ -122,11 +122,18 @@ type MCIntent =
 function parseMCIntent(raw: string): MCIntent | null {
   const t = raw.replace(/<@!?\d+>/g, "").trim();
 
-  // Connect: "connect to server.net", "connect to server.net:25565", "join server.net port 19132"
+  // Connect: "connect to server.net", "connect to server.net:25565 using microsoft", "join server offline"
   let m = t.match(
     /\b(?:connect\s+to|join)\s+([a-zA-Z0-9.\-_]+)(?::(\d+))?(?:\s+(?:port\s+)?(\d+))?/i
   );
-  if (m) return { type: "connect", host: m[1]!, port: parseInt(m[2] ?? m[3] ?? "25565") };
+  if (m) {
+    const rest = t.slice(m.index! + m[0].length);
+    const authOverride: "offline" | "microsoft" | undefined =
+      /\b(?:microsoft|ms|msauth|online)\b/i.test(rest) ? "microsoft"
+      : /\boffline\b/i.test(rest) ? "offline"
+      : undefined;
+    return { type: "connect", host: m[1]!, port: parseInt(m[2] ?? m[3] ?? "25565"), authOverride };
+  }
 
   // Disconnect: must include "mc/minecraft/server" keyword
   if (
@@ -191,7 +198,7 @@ async function handleMCCommand(msg: DiscordMessage): Promise<boolean> {
 
     switch (intent.type) {
       case "connect":
-        reply = await connectToServer(intent.host, intent.port, msg.channelId);
+        reply = await connectToServer(intent.host, intent.port, msg.channelId, intent.authOverride);
         break;
       case "disconnect":
         reply = disconnect();

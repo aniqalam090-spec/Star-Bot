@@ -8,7 +8,7 @@ import {
   setConfig,
   getConfig,
 } from "./memory";
-import { getMCStatus, disconnect as mcDisconnect } from "./minecraft";
+import { getMCStatus, disconnect as mcDisconnect, setAuthMode, getAuthMode, type AuthMode } from "./minecraft";
 import { logger } from "../lib/logger";
 
 const OWNER_ID = process.env.DISCORD_OWNER_ID!;
@@ -61,6 +61,10 @@ export async function handleCommand(msg: DiscordMessage): Promise<boolean> {
       "`!botname <name>` — set the bot's display name in prompts",
       "`!botpersonality <description>` — set a custom personality note",
       "`!stats` — see bot stats",
+      "**Minecraft:**",
+      "`!mcauth microsoft` / `!mcauth offline` — set default Minecraft auth mode",
+      "`!mcstatus` — show Minecraft connection status",
+      "`!mcdisconnect` — force disconnect from Minecraft",
     ].join("\n");
     await msg.reply(help);
     return true;
@@ -179,6 +183,23 @@ export async function handleCommand(msg: DiscordMessage): Promise<boolean> {
         `**Bot stats**\n` +
           `memories: ${all.length} total (${global} global, ${userMems} user-specific)\n` +
           `uptime: ${Math.floor(process.uptime() / 60)}m`
+      );
+      return true;
+    }
+
+    case "mcauth": {
+      const mode = args.trim().toLowerCase();
+      if (mode !== "microsoft" && mode !== "offline") {
+        await msg.reply(
+          `current auth mode: **${getAuthMode()}**\nusage: \`!mcauth microsoft\` or \`!mcauth offline\``
+        );
+        return true;
+      }
+      setAuthMode(mode as AuthMode);
+      await msg.reply(
+        mode === "microsoft"
+          ? `auth mode set to **microsoft** — next time you connect to an online-mode server, i'll send you a device code here`
+          : `auth mode set to **offline** — good for cracked / private servers`
       );
       return true;
     }
