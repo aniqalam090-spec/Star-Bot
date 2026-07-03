@@ -6,6 +6,7 @@ import {
   type Message,
 } from "discord.js";
 import { onMessage } from "./handlers";
+import { initMinecraft } from "./minecraft";
 import { logger } from "../lib/logger";
 
 function validateEnv() {
@@ -51,6 +52,7 @@ export async function startBot() {
       { tag: c.user.tag, ownerId: process.env.DISCORD_OWNER_ID },
       "Discord bot ready"
     );
+    initMinecraft(client);
   });
 
   client.on(Events.MessageCreate, (msg: Message) => {

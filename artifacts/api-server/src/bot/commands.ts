@@ -8,6 +8,7 @@ import {
   setConfig,
   getConfig,
 } from "./memory";
+import { getMCStatus, disconnect as mcDisconnect } from "./minecraft";
 import { logger } from "../lib/logger";
 
 const OWNER_ID = process.env.DISCORD_OWNER_ID!;
@@ -179,6 +180,16 @@ export async function handleCommand(msg: DiscordMessage): Promise<boolean> {
           `memories: ${all.length} total (${global} global, ${userMems} user-specific)\n` +
           `uptime: ${Math.floor(process.uptime() / 60)}m`
       );
+      return true;
+    }
+
+    case "mcstatus": {
+      await msg.reply(getMCStatus());
+      return true;
+    }
+
+    case "mcdisconnect": {
+      await msg.reply(mcDisconnect());
       return true;
     }
 

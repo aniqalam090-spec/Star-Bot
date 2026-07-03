@@ -10,6 +10,10 @@ import {
 } from "./memory";
 import { generateResponse, extractMemories, type ChatMessage } from "./ai";
 import { handleCommand } from "./commands";
+import {
+  connectToServer, disconnect, sendChat, doMove, stopAll,
+  getPos, getHealth, getMCStatus, isConnected,
+} from "./minecraft";
 import { logger } from "../lib/logger";
 
 const OWNER_ID       = process.env.DISCORD_OWNER_ID!;
@@ -96,7 +100,130 @@ ${ownerContext}${personalityNote ? `\nOWNER'S NOTE: ${personalityNote}` : ""}
 VIP USER:
 - Username "ialegend" is a VIP — treat them with genuine respect. Still keep your personality, but no roasting them, no sarcasm at their expense. Be cool, friendly, and helpful with them. They're good people.
 
+MINECRAFT STATUS:
+- ${isConnected() ? getMCStatus() : "not connected to any Minecraft server"}
+- If the owner asks you to do something in Minecraft (connect, move, chat, etc.) just acknowledge — the action runs separately.
+
 ${memorySections ? memorySections + "\n\n" : ""}Current time (UTC): ${now}`;
+}
+
+// ── Minecraft natural-language handler (owner only) ────────────────────────
+
+type MCIntent =
+  | { type: "connect"; host: string; port: number }
+  | { type: "disconnect" }
+  | { type: "chat"; message: string }
+  | { type: "move"; direction: string; durationMs: number }
+  | { type: "stop" }
+  | { type: "status" }
+  | { type: "position" }
+  | { type: "health" };
+
+function parseMCIntent(raw: string): MCIntent | null {
+  const t = raw.replace(/<@!?\d+>/g, "").trim();
+
+  // Connect: "connect to server.net", "connect to server.net:25565", "join server.net port 19132"
+  let m = t.match(
+    /\b(?:connect\s+to|join)\s+([a-zA-Z0-9.\-_]+)(?::(\d+))?(?:\s+(?:port\s+)?(\d+))?/i
+  );
+  if (m) return { type: "connect", host: m[1]!, port: parseInt(m[2] ?? m[3] ?? "25565") };
+
+  // Disconnect: must include "mc/minecraft/server" keyword
+  if (
+    /\b(?:disconnect|leave|quit)\b.{0,40}\b(?:mc|minecraft|server)\b/i.test(t) ||
+    /\b(?:mc|minecraft|server)\b.{0,40}\b(?:disconnect|leave|quit)\b/i.test(t)
+  ) return { type: "disconnect" };
+
+  // Chat in-game: "say hello in minecraft" — requires explicit qualifier
+  m = t.match(/\bsay\s+(.+?)\s+in\s+(?:minecraft|mc|game|server)\b/i);
+  if (m) return { type: "chat", message: m[1]! };
+  m = t.match(/\bin\s+(?:minecraft|mc|game|server)\b.*?\bsay\s+(.+)/i);
+  if (m) return { type: "chat", message: m[1]! };
+
+  // Move with optional duration: "move forward for 3 seconds", "go right", "walk back for 1s"
+  m = t.match(
+    /\b(?:move|walk|go|run)\s+(forward|back(?:ward)?|left|right|north|south|east|west)\b(?:.*?for\s+(\d+(?:\.\d+)?)\s*(?:seconds?|secs?|s\b))?/i
+  );
+  if (m) return { type: "move", direction: m[1]!, durationMs: m[2] ? Math.round(parseFloat(m[2]) * 1000) : 1000 };
+
+  // Jump
+  if (/^\s*(?:star[,\s]+)?jump\s*(?:now|please|again)?\s*$/i.test(t) || /\bjump\s+(?:now|please|again)\b/i.test(t))
+    return { type: "move", direction: "jump", durationMs: 500 };
+
+  // Sneak / sprint with optional duration
+  m = t.match(/\bsneak(?:\s+for\s+(\d+(?:\.\d+)?)\s*(?:seconds?|secs?|s\b))?\b/i);
+  if (m) return { type: "move", direction: "sneak", durationMs: m[1] ? Math.round(parseFloat(m[1]) * 1000) : 2000 };
+
+  m = t.match(/\bsprint(?:\s+for\s+(\d+(?:\.\d+)?)\s*(?:seconds?|secs?|s\b))?\b/i);
+  if (m) return { type: "move", direction: "sprint", durationMs: m[1] ? Math.round(parseFloat(m[1]) * 1000) : 3000 };
+
+  // Stop moving (explicit phrasing, or plain "stop" only when already in MC)
+  if (/\bstop\s+(?:moving|all|everything)\b/i.test(t)) return { type: "stop" };
+  if (/^\s*(?:star[,\s]+)?stop\s*$/i.test(t) && isConnected()) return { type: "stop" };
+
+  // Status
+  if (/\b(?:mc|minecraft)\s*status\b/i.test(t) || /\bare\s+you\s+(?:in|on|connected)\b/i.test(t))
+    return { type: "status" };
+
+  // Position — require MC context
+  if (/\b(?:pos(?:ition)?|coords?|where)\b.{0,20}\b(?:mc|minecraft|in[\s-]game)\b/i.test(t) ||
+      /\b(?:mc|minecraft|in[\s-]game)\b.{0,20}\b(?:pos(?:ition)?|coords?|where)\b/i.test(t))
+    return { type: "position" };
+
+  // Health — require MC context
+  if (/\b(?:health|hp|hearts?)\b.{0,20}\b(?:mc|minecraft|in[\s-]game)\b/i.test(t) ||
+      /\b(?:mc|minecraft|in[\s-]game)\b.{0,20}\b(?:health|hp)\b/i.test(t))
+    return { type: "health" };
+
+  return null;
+}
+
+async function handleMCCommand(msg: DiscordMessage): Promise<boolean> {
+  const intent = parseMCIntent(msg.content);
+  if (!intent) return false;
+
+  // Show typing while working (connect can take a moment)
+  if (msg.channel.isSendable() && "sendTyping" in msg.channel)
+    (msg.channel as { sendTyping: () => Promise<void> }).sendTyping().catch(() => null);
+
+  try {
+    let reply: string;
+
+    switch (intent.type) {
+      case "connect":
+        reply = await connectToServer(intent.host, intent.port, msg.channelId);
+        break;
+      case "disconnect":
+        reply = disconnect();
+        break;
+      case "chat":
+        reply = sendChat(intent.message);
+        break;
+      case "move":
+        reply = await doMove(intent.direction, intent.durationMs);
+        break;
+      case "stop":
+        reply = stopAll();
+        break;
+      case "status":
+        reply = getMCStatus();
+        break;
+      case "position":
+        reply = getPos();
+        break;
+      case "health":
+        reply = getHealth();
+        break;
+    }
+
+    if (msg.channel.isSendable()) await msg.channel.send(reply);
+  } catch (err) {
+    logger.error({ err }, "MC command error");
+    if (msg.channel.isSendable())
+      await msg.channel.send(`mc error: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  return true;
 }
 
 // ── Main handler ───────────────────────────────────────────────────────────
@@ -128,9 +255,15 @@ export async function onMessage(client: Client, msg: DiscordMessage) {
   // Don't stack AI calls for the same user
   if (pendingRequests.has(userId)) return;
 
-  // Owner prefix commands
+  // Owner prefix commands (! prefix)
   const handledAsCommand = await handleCommand(msg);
   if (handledAsCommand) return;
+
+  // Owner Minecraft natural-language commands — runs before pendingRequests, no AI overhead
+  if (userId === OWNER_ID) {
+    const handledAsMC = await handleMCCommand(msg);
+    if (handledAsMC) return;
+  }
 
   // Mark request as in-flight
   pendingRequests.add(userId);
