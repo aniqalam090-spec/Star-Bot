@@ -100,6 +100,15 @@ async function buildAll() {
       "puppeteer",
       "puppeteer-core",
       "electron",
+      // mineflayer + its native/dynamic deps — must resolve at runtime
+      "mineflayer",
+      "minecraft-protocol",
+      "sodium-native",
+      "prismarine-*",
+      "minecraft-data",
+      "node-int64",
+      "nbt",
+      "vec3",
     ],
     sourcemap: "linked",
     plugins: [
