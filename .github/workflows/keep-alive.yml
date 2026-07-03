@@ -1,0 +1,17 @@
+name: Keep Bot Alive
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"  # every 5 minutes, 24/7
+  workflow_dispatch:        # allow manual trigger
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping bot health endpoint
+        run: |
+          curl -sf --max-time 10 \
+            https://98e19fd1-ed7a-48d3-bd99-bbd89a004549-00-9f1m8ue9bxn1.sisko.replit.dev/api/healthz \
+            && echo "Bot is alive" \
+            || echo "Bot is sleeping — ping sent to wake it"
