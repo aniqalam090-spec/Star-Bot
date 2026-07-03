@@ -168,9 +168,12 @@ function parseMCIntent(raw: string): MCIntent | null {
   if (/\bstop\s+(?:moving|all|everything)\b/i.test(t)) return { type: "stop" };
   if (/^\s*(?:star[,\s]+)?stop\s*$/i.test(t) && isConnected()) return { type: "stop" };
 
-  // Status
-  if (/\b(?:mc|minecraft)\s*status\b/i.test(t) || /\bare\s+you\s+(?:in|on|connected)\b/i.test(t))
-    return { type: "status" };
+  // Status — require explicit MC context to avoid capturing unrelated "are you connected?" questions
+  if (
+    /\b(?:mc|minecraft)\s*status\b/i.test(t) ||
+    /\bare\s+you\s+(?:in|on|connected).{0,30}\b(?:mc|minecraft|server)\b/i.test(t) ||
+    /\b(?:mc|minecraft|server)\b.{0,30}\bare\s+you\s+(?:in|on|connected)\b/i.test(t)
+  ) return { type: "status" };
 
   // Position — require MC context
   if (/\b(?:pos(?:ition)?|coords?|where)\b.{0,20}\b(?:mc|minecraft|in[\s-]game)\b/i.test(t) ||

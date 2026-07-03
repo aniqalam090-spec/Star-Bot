@@ -65,6 +65,17 @@ async function reportToDiscord(channelId: string, text: string) {
   } catch { /* silently ignore */ }
 }
 
+/** Send a DM to the bot owner — used for sensitive auth codes. */
+async function dmOwner(text: string) {
+  if (!discord) return;
+  const ownerId = process.env.DISCORD_OWNER_ID;
+  if (!ownerId) return;
+  try {
+    const owner = await discord.users.fetch(ownerId);
+    await owner.send(text);
+  } catch { /* silently ignore — owner may have DMs closed */ }
+}
+
 // ── Connect ───────────────────────────────────────────────────────────────────
 
 export async function connectToServer(
@@ -83,11 +94,11 @@ export async function connectToServer(
     await new Promise((r) => setTimeout(r, 500));
   }
 
-  // For Microsoft auth, warn the user upfront so they know to watch for the code
+  // For Microsoft auth, warn upfront — actual device code goes to owner's DMs only
   if (auth === "microsoft") {
     await reportToDiscord(
       reportChannelId,
-      `**[MC]** Starting Microsoft auth for \`${host}:${port}\` — watch for a device-code message below…`
+      `**[MC]** Connecting to \`${host}:${port}\` with Microsoft auth — if re-auth is needed I'll DM you the code.`
     );
   }
 
@@ -115,11 +126,13 @@ export async function connectToServer(
         expires_in: number;
       }) => {
         const mins = Math.floor(data.expires_in / 60);
-        await reportToDiscord(
-          reportChannelId,
+        // DM the owner — never post credentials to a shared channel
+        await dmOwner(
           `**[MC Auth]** Open **<${data.verification_uri}>** and enter code \`${data.user_code}\`\n` +
             `*(expires in ${mins} minute${mins === 1 ? "" : "s"})*`
         );
+        // Let the channel know the code was sent privately
+        await reportToDiscord(reportChannelId, "**[MC]** Auth code sent to your DMs — complete sign-in there to continue.");
       };
     }
 
